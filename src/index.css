@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Playfair Display", serif;
+}
+
+@layer base {
+  body {
+    @apply bg-black text-white antialiased;
+    overflow: hidden;
+  }
+}
+
+@layer utilities {
+  .preserve-3d {
+    transform-style: preserve-3d;
+  }
+  
+  .perspective-2000 {
+    perspective: 2000px;
+  }
+}
+
+@keyframes iridescent {
+  0% { filter: hue-rotate(0deg) brightness(1); }
+  50% { filter: hue-rotate(180deg) brightness(1.2); }
+  100% { filter: hue-rotate(360deg) brightness(1); }
+}
+
+@keyframes kaleidoscope {
+  0% { transform: rotateX(10deg) rotateZ(0deg); }
+  50% { transform: rotateX(30deg) rotateZ(180deg) scale(1.1); }
+  100% { transform: rotateX(10deg) rotateZ(360deg); }
+}
+
+.animate-iridescent {
+  animation: iridescent 10s infinite linear;
+}
+
+.animate-kaleidoscope {
+  animation: kaleidoscope 20s infinite linear;
+}
+
+/* Custom Tufted Pattern */
+.tufted-pattern {
+  background-image: 
+    radial-gradient(circle at 50% 50%, rgba(0,0,0,0.05) 0%, transparent 70%),
+    linear-gradient(45deg, transparent 48%, rgba(0,0,0,0.1) 50%, transparent 52%),
+    linear-gradient(-45deg, transparent 48%, rgba(0,0,0,0.1) 50%, transparent 52%);
+  background-size: 100px 100px;
+}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Cormorant+Garamond:ital,wght@1,300;1,400;1,500&family=JetBrains+Mono:wght@300;400&display=swap');
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Cormorant Garamond", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  background-color: #0a0a0a;
+  color: white;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+canvas {
+  display: block;
+}
+
+.preserve-3d {
+  transform-style: preserve-3d;
+}
+
+.perspective-1500 {
+  perspective: 1500px;
+}

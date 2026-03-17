@@ -1,0 +1,5 @@
+{
+  "name": "Marble",
+  "description": "An atmospheric, sensory experience where five distinct marbles manifest through your words and interactions.",
+  "requestFramePermissions": ["geolocation", "camera", "microphone"]
+}
