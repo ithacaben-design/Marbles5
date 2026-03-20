@@ -1,16 +1,737 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
-    <title>Marble</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>The Gamified Box</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Georgia', serif; }
+        canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+        
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; display: flex; flex-direction: column;
+            align-items: center; justify-content: space-between; padding: 20px 0;
+            box-sizing: border-box; z-index: 10;
+        }
+        
+        #ui-layer::before {
+            content: ''; position: absolute; inset: 0;
+            background-image: url('https://www.transparenttextures.com/patterns/p6.png');
+            opacity: 0.15; pointer-events: none; z-index: -1;
+        }
 
+        .title-container { text-align: center; }
+        .title { color: #d4af37; text-shadow: 0 2px 4px rgba(0,0,0,0.8); letter-spacing: 4px; font-size: 14px; transition: 0.3s; margin-bottom: 5px; }
+        .instructions { color: rgba(255,255,255,0.5); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; transition: 0.3s; }
+
+        /* The Progression UI */
+        .controls-container { width: 90%; max-width: 400px; display: flex; flex-direction: column; gap: 10px; pointer-events: auto; }
+        
+        .mode-bar { display: flex; justify-content: center; gap: 5px; flex-wrap: wrap; }
+        .mode-btn {
+            background: rgba(20, 10, 5, 0.8); border: 1px solid #555; color: #777;
+            padding: 8px 12px; font-family: 'Georgia', serif; font-size: 10px;
+            letter-spacing: 1px; cursor: pointer; text-transform: uppercase; transition: 0.3s;
+        }
+        .mode-btn.unlocked { border-color: #d4af37; color: #d4af37; }
+        .mode-btn.active { background: #d4af37; color: #000; box-shadow: 0 0 10px rgba(212, 175, 55, 0.5); }
+
+        .log-bar { display: flex; justify-content: space-between; gap: 5px; background: rgba(0,0,0,0.6); padding: 10px; border: 1px solid #3d2b1f; transition: opacity 0.5s; }
+        .log-btn {
+            flex: 1; background: transparent; border: 1px solid; padding: 10px 0; 
+            cursor: pointer; transition: 0.2s; font-size: 9px; color: white; text-align: center;
+        }
+        .log-btn:active { transform: scale(0.9); }
+        .log-btn.done { pointer-events: none; opacity: 0.9; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="title-container">
+            <div class="title" id="mode-title">SANDBOX MODE</div>
+            <div class="instructions" id="mode-instructions">Log habits to unlock the artifact</div>
+        </div>
+        
+        <div class="controls-container">
+            <div class="mode-bar" id="mode-bar">
+                <button class="mode-btn unlocked active" id="btn-sandbox" onclick="activateMode('sandbox')">Sandbox</button>
+                <button class="mode-btn" id="btn-orbit" onclick="activateMode('orbit')">Orbit (Locked)</button>
+                <button class="mode-btn" id="btn-billiards" onclick="activateMode('billiards')">Billiards (Locked)</button>
+                <button class="mode-btn" id="btn-pinball" onclick="activateMode('pinball')">Pinball (Locked)</button>
+                <button class="mode-btn" id="btn-maze" onclick="activateMode('maze')">Maze (Locked)</button>
+                <button class="mode-btn" id="btn-koi" onclick="activateMode('koi')">Koi Pond (Locked)</button>
+            </div>
+            
+            <div class="log-bar" id="log-bar">
+                <!-- Buttons dynamically generated -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        window.onload = function() {
+            // --- PILLAR CONFIGURATION ---
+            const PILLARS = [
+                { id: 'sleep', name: 'Sleep', color: 0xd4af37, uiColor: '#d4af37', shape: 'TorusKnotGeometry', args: [0.2, 0.06, 64, 8] },     // Gold
+                { id: 'sunlight', name: 'Sun', color: 0x4287f5, uiColor: '#4287f5', shape: 'OctahedronGeometry', args: [0.3] },    // Blue
+                { id: 'movement', name: 'Move', color: 0xf54242, uiColor: '#f54242', shape: 'SphereGeometry', args: [0.3, 32, 32] },   // Red
+                { id: 'nutrition', name: 'Food', color: 0x9c42f5, uiColor: '#9c42f5', shape: 'CylinderGeometry', args: [0.2, 0.2, 0.4, 16] },  // Purple
+                { id: 'relationships', name: 'Social', color: 0x42f569, uiColor: '#42f569', shape: 'TorusGeometry', args: [0.2, 0.1, 16, 32] } // Green
+            ];
+
+            // --- 1. INITIALIZE PHYSICS ---
+            const { Engine, Render, Runner, Bodies, Composite, Mouse, MouseConstraint, Constraint, Events } = Matter;
+            const engine = Engine.create();
+            engine.gravity.y = 0; // Gyro takes over in sandbox
+
+            let currentMode = 'sandbox'; 
+
+            // --- 2. INITIALIZE VISUALS ---
+            const scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050505, 0.02);
+            const aspect = window.innerWidth / window.innerHeight;
+            const viewSize = 10; 
+            const camera = new THREE.OrthographicCamera(-viewSize*aspect/2, viewSize*aspect/2, viewSize/2, -viewSize/2, 0.1, 100);
+            camera.position.z = 10;
+
+            const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 5, 10);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // Materials
+            const woodMat = new THREE.MeshStandardMaterial({ color: 0x3d2b1f, roughness: 0.9 });
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x1a100a, roughness: 1.0 });
+            const flipperMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.5, roughness: 0.4 });
+            const brassMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.2 });
+            const riverStoneMat = new THREE.MeshStandardMaterial({ color: 0x222426, roughness: 0.8, metalness: 0.2 });
+            
+            // Build the physical box
+            const boxWidth = viewSize * aspect;
+            const boxHeight = viewSize;
+            
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(boxWidth, boxHeight), floorMat);
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            const physicsBodies = [];
+            function createWall(x, y, w, h) {
+                const body = Bodies.rectangle(x, y, w, h, { isStatic: true, friction: 0.5, restitution: 0.2 });
+                physicsBodies.push(body);
+                const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, 1.5), woodMat);
+                mesh.position.set(x, -y, 0.75); 
+                scene.add(mesh);
+            }
+
+            createWall(0, -boxHeight/2 - 0.5, boxWidth + 2, 1); 
+            createWall(0, boxHeight/2 + 0.5, boxWidth + 2, 1); 
+            createWall(-boxWidth/2 - 0.5, 0, 1, boxHeight); 
+            createWall(boxWidth/2 + 0.5, 0, 1, boxHeight); 
+
+            // --- 3. THE 5 PILLAR MARBLES ---
+            const marbles = [];
+            PILLARS.forEach((pillar, i) => {
+                const x = -boxWidth/2 + 1 + Math.random();
+                const y = -boxHeight/2 + 1 + Math.random();
+                
+                const body = Bodies.circle(x, y, 0.3, { restitution: 0.6, friction: 0.001, density: 0.05 });
+                physicsBodies.push(body);
+
+                // Start completely hollow/white
+                const mat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, transmission: 0.9, opacity: 1, roughness: 0.1 });
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.3, 32, 32), mat);
+                mesh.castShadow = true;
+                scene.add(mesh);
+
+                marbles.push({ 
+                    body, mesh, material: mat, pillarData: pillar, 
+                    promptIndex: 0, fillLevel: 0, currentScale: 1
+                });
+            });
+
+            // --- 4. OPTIONAL MODES (Hidden initially) ---
+
+            // FAR RIGHT INSET MARBLE (Koi Pond Trigger)
+            const insetMarbleMat = new THREE.MeshPhysicalMaterial({ 
+                color: 0x222222, emissive: 0x000000, emissiveIntensity: 0, 
+                transmission: 0.8, roughness: 0.1 
+            });
+            const insetMarble = new THREE.Mesh(new THREE.SphereGeometry(0.3, 32, 32), insetMarbleMat);
+            insetMarble.position.set(boxWidth/2 - 0.8, -0.4, 0.1); // Far right, embedded
+            scene.add(insetMarble);
+
+            const insetLight = new THREE.PointLight(0xffffff, 0, 4);
+            insetLight.position.copy(insetMarble.position);
+            insetLight.position.z += 0.5; // Pull forward to cast glow on the floor
+            scene.add(insetLight);
+
+            // BILLIARDS POCKETS
+            const billiardsPockets = [];
+            const pocketGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 32);
+            const pocketMat = new THREE.MeshBasicMaterial({ color: 0x050505 });
+            [
+                {x: -boxWidth/2 + 0.6, y: -boxHeight/2 + 0.6}, // Top Left
+                {x: boxWidth/2 - 0.6, y: -boxHeight/2 + 0.6},  // Top Right
+                {x: -boxWidth/2 + 0.6, y: boxHeight/2 - 0.6},  // Bottom Left
+                {x: boxWidth/2 - 0.6, y: boxHeight/2 - 0.6},   // Bottom Right
+                {x: -boxWidth/2 + 0.4, y: 0},                  // Mid Left
+                {x: boxWidth/2 - 0.4, y: 0}                    // Mid Right
+            ].forEach(p => {
+                const mesh = new THREE.Mesh(pocketGeo, pocketMat);
+                mesh.position.set(p.x, -p.y, 0.1);
+                mesh.rotation.x = Math.PI / 2;
+                mesh.visible = false;
+                scene.add(mesh);
+                billiardsPockets.push(mesh);
+            });
+            
+            // MAZE
+            const mazeWalls = [];
+            [
+                { x: -2.0, y: 0.0, w: 0.5, h: 4.0 }, 
+                { x: 2.0, y: -2.0, w: 4.0, h: 0.5 }, 
+                { x: 1.0, y: 2.0, w: 5.0, h: 0.5 }   
+            ].forEach(w => {
+                const body = Bodies.rectangle(w.x, w.y, w.w, w.h, { isStatic: true, isSensor: true }); // Sensor = disabled
+                physicsBodies.push(body);
+                const mesh = new THREE.Mesh(new THREE.BoxGeometry(w.w, w.h, 1.5), woodMat);
+                mesh.position.set(w.x, -w.y, 0.75); 
+                mesh.visible = false;
+                scene.add(mesh);
+                mazeWalls.push({body, mesh});
+            });
+
+            // VINTAGE PINBALL ELEMENTS
+            const pinballElements = [];
+            [ { x: 0, y: -2.5, r: 0.6 }, { x: -1.5, y: -1.0, r: 0.5 }, { x: 1.5, y: -1.0, r: 0.5 } ].forEach(b => {
+                const body = Bodies.circle(b.x, b.y, b.r, { isStatic: true, isSensor: true, restitution: 1.5 });
+                physicsBodies.push(body);
+                const mesh = new THREE.Mesh(new THREE.CylinderGeometry(b.r, b.r, 0.5, 32), brassMat);
+                mesh.rotation.x = Math.PI / 2;
+                mesh.position.set(b.x, -b.y, 0.25);
+                mesh.castShadow = true;
+                mesh.visible = false;
+                scene.add(mesh);
+                pinballElements.push({body, mesh});
+            });
+
+            [ { x: -2.2, y: 1.5, w: 0.4, h: 3, angle: -Math.PI / 6 }, { x: 2.2, y: 1.5, w: 0.4, h: 3, angle: Math.PI / 6 } ].forEach(w => {
+                const body = Bodies.rectangle(w.x, w.y, w.w, w.h, { isStatic: true, isSensor: true, angle: w.angle, restitution: 0.8 });
+                physicsBodies.push(body);
+                const mesh = new THREE.Mesh(new THREE.BoxGeometry(w.w, w.h, 1.5), woodMat);
+                mesh.position.set(w.x, -w.y, 0.75);
+                mesh.rotation.z = -w.angle; 
+                mesh.visible = false;
+                scene.add(mesh);
+                pinballElements.push({body, mesh});
+            });
+
+            const flippers = [];
+            function createFlipper(x, y, w, h, isLeft) {
+                const body = Bodies.rectangle(x, y, w, h, { isSensor: true }); 
+                const pivotX = isLeft ? x - w/2 + 0.2 : x + w/2 - 0.2;
+                const pivot = Constraint.create({ pointA: { x: pivotX, y: y }, bodyB: body, pointB: { x: isLeft ? -w/2 + 0.2 : w/2 - 0.2, y: 0 }, stiffness: 1, length: 0 });
+                const spring = Constraint.create({ pointA: { x: x, y: y + 2 }, bodyB: body, pointB: { x: isLeft ? w/2 : -w/2, y: 0 }, stiffness: 0.02, length: 1 });
+                physicsBodies.push(body);
+                Composite.add(engine.world, [pivot, spring]);
+                const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, 1.0), flipperMat);
+                mesh.position.z = 0.5;
+                mesh.visible = false;
+                scene.add(mesh);
+                flippers.push({ body, mesh, isLeft });
+            }
+            createFlipper(-1.5, boxHeight/2 - 1.5, 2.5, 0.4, true);
+            createFlipper(1.5, boxHeight/2 - 1.5, 2.5, 0.4, false);
+
+            // ZEN GARDEN / KOI POND ELEMENTS
+            const koiElements = [];
+            const stonePos = [
+                {x: -1.5, y: -2.5, s: 0.8}, {x: 1.5, y: -3.0, s: 1.2},
+                {x: -2.0, y: 1.0, s: 0.9}, {x: 2.2, y: 0.5, s: 0.7},
+                {x: 0.5, y: 2.5, s: 1.0}, {x: -1.0, y: 3.5, s: 0.6},
+                {x: 1.8, y: 3.0, s: 0.8}, {x: 0, y: 0, s: 1.1}
+            ];
+            stonePos.forEach(p => {
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 16), riverStoneMat);
+                mesh.scale.set(p.s, p.s * 0.5, p.s * 0.8);
+                mesh.position.set(p.x, -p.y, 0.25);
+                mesh.rotation.z = Math.random() * Math.PI;
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                mesh.visible = false;
+                scene.add(mesh);
+                koiElements.push(mesh);
+            });
+
+            const gemPos = [ {x: -1.8, y: -0.5, c: 0x55ff55}, {x: 1.8, y: 1.5, c: 0xdddd22} ];
+            gemPos.forEach(p => {
+                const mat = new THREE.MeshStandardMaterial({color: p.c, emissive: p.c, emissiveIntensity: 0.6, roughness: 0.1});
+                const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.12), mat);
+                mesh.position.set(p.x, -p.y, 0.15);
+                mesh.castShadow = true;
+                mesh.visible = false;
+                scene.add(mesh);
+                koiElements.push(mesh);
+            });
+
+            // Brass UI Tray Rings (for docking)
+            const trayWidth = Math.min(boxWidth * 0.9, 8);
+            const startX = -trayWidth / 2;
+            const stepX = trayWidth / 5;
+            for(let i=0; i<5; i++) {
+                const ring = new THREE.Mesh(new THREE.TorusGeometry(0.35, 0.05, 16, 32), brassMat);
+                const x = startX + stepX * i + (stepX/2);
+                ring.position.set(x, -(boxHeight/2 - 1.2), 0.1); 
+                ring.visible = false;
+                scene.add(ring);
+                koiElements.push(ring);
+            }
+
+            Composite.add(engine.world, physicsBodies);
+
+            // --- 5. PROGRESSION LOGIC ---
+            const state = { unlockedOrbit: false, unlockedBilliards: false, unlockedPinball: false, unlockedMaze: false, unlockedKoi: false };
+
+            const logBar = document.getElementById('log-bar');
+            marbles.forEach((m, index) => {
+                const btn = document.createElement('button');
+                btn.className = 'log-btn';
+                btn.style.borderColor = m.pillarData.uiColor;
+                btn.innerHTML = `${m.pillarData.name}<br>(0%)`;
+                btn.onclick = () => answerPrompt(index, btn);
+                logBar.appendChild(btn);
+            });
+
+            function answerPrompt(marbleIndex, btnEl) {
+                const m = marbles[marbleIndex];
+                if (m.fillLevel >= 0.9) return; // Strict 90% Cap
+
+                m.promptIndex++;
+                m.fillLevel = Math.min(m.fillLevel + 0.10, 0.9); // 10% increment allows it to exactly hit 80% and 90%
+
+                const displayPercent = Math.round(m.fillLevel * 100);
+                btnEl.innerHTML = `${m.pillarData.name}<br>(${displayPercent}%)`;
+
+                const targetColor = new THREE.Color(m.pillarData.color);
+                const hollowColor = new THREE.Color(0xffffff);
+                
+                const visualProgress = m.fillLevel / 0.9;
+                m.material.color.copy(hollowColor).lerp(targetColor, visualProgress);
+                m.material.transmission = 0.9 - (0.8 * visualProgress);
+
+                // Emit color and glow at 80% threshold
+                if (m.fillLevel >= 0.8) {
+                    btnEl.style.backgroundColor = m.pillarData.uiColor;
+                    btnEl.style.color = '#000';
+                    btnEl.style.boxShadow = `0 0 12px ${m.pillarData.uiColor}`;
+                }
+
+                // Lock out the UI button at 90%
+                if (m.fillLevel >= 0.9) {
+                    btnEl.classList.add('done');
+                }
+
+                checkUnlocks();
+            }
+
+            function checkUnlocks() {
+                const anyAns1 = marbles.some(m => m.promptIndex >= 1);
+                const anyAns2 = marbles.some(m => m.promptIndex >= 2);
+                const anyAns3 = marbles.some(m => m.promptIndex >= 3);
+                const allMaxed = marbles.every(m => m.fillLevel >= 0.9); // Koi Pond trigger condition
+                const totalAns = marbles.reduce((sum, m) => sum + m.promptIndex, 0);
+
+                if (anyAns1 && !state.unlockedOrbit) {
+                    state.unlockedOrbit = true;
+                    unlockBtn('btn-orbit', 'Orbit');
+                    window.activateMode('orbit'); 
+                }
+                if (totalAns >= 2 && !state.unlockedBilliards) {
+                    state.unlockedBilliards = true;
+                    unlockBtn('btn-billiards', 'Billiards');
+                    window.activateMode('billiards');
+                }
+                if (anyAns2 && !state.unlockedPinball) {
+                    state.unlockedPinball = true;
+                    unlockBtn('btn-pinball', 'Pinball');
+                    window.activateMode('pinball');
+                }
+                if (anyAns3 && !state.unlockedMaze) {
+                    state.unlockedMaze = true;
+                    unlockBtn('btn-maze', 'Maze');
+                    window.activateMode('maze');
+                }
+                if (allMaxed && !state.unlockedKoi) {
+                    state.unlockedKoi = true;
+                    unlockBtn('btn-koi', 'Koi Pond');
+                    
+                    // Illuminate the physical inset marble instead of auto-triggering Koi Mode
+                    insetMarbleMat.color.setHex(0xffffff);
+                    insetMarbleMat.emissive.setHex(0xffffff);
+                    insetMarbleMat.emissiveIntensity = 2;
+                    insetLight.intensity = 2;
+
+                    document.getElementById('mode-instructions').innerText = "Harmony achieved. Tap the glowing sphere to transcend.";
+                }
+            }
+
+            function unlockBtn(id, name) {
+                const btn = document.getElementById(id);
+                btn.innerText = name;
+                btn.classList.add('unlocked');
+            }
+
+            // --- 6. MODE SWITCHER ---
+            window.activateMode = function(newMode) {
+                if (newMode === 'orbit' && !state.unlockedOrbit) return;
+                if (newMode === 'billiards' && !state.unlockedBilliards) return;
+                if (newMode === 'pinball' && !state.unlockedPinball) return;
+                if (newMode === 'maze' && !state.unlockedMaze) return;
+                if (newMode === 'koi' && !state.unlockedKoi) return;
+
+                if (newMode === 'koi' && currentMode !== 'koi') {
+                    // Trigger the ultimate acoustic/haptic celebration only upon entering the mode
+                    playAcousticRipple();
+                    if (navigator.vibrate) navigator.vibrate([50, 100, 50, 100, 200]);
+                }
+
+                currentMode = newMode;
+                document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                document.getElementById('btn-' + newMode).classList.add('active');
+
+                // Reset physical state & hide mode-specific elements
+                floorMat.color.setHex(0x1a100a); // Default dark wood
+                document.getElementById('log-bar').style.display = 'flex';
+                document.getElementById('log-bar').style.opacity = '1';
+                document.getElementById('log-bar').style.pointerEvents = 'auto';
+                
+                insetMarble.visible = newMode !== 'koi'; // Hide trigger during Koi mode
+                insetLight.intensity = (state.unlockedKoi && newMode !== 'koi') ? 2 : 0;
+
+                marbles.forEach(m => {
+                    m.body.isSensor = false; m.mesh.visible = true;
+                    m.body.restitution = 0.6; // Reset bounciness
+                    m.body.frictionAir = 0.001; // Reset air friction
+                    Matter.Body.scale(m.body, 1/m.currentScale, 1/m.currentScale);
+                    m.mesh.scale.set(1, 1, 1); m.currentScale = 1;
+                    Matter.Body.setAngularVelocity(m.body, 0);
+                });
+                billiardsPockets.forEach(p => { p.visible = false; });
+                mazeWalls.forEach(w => { w.body.isSensor = true; w.mesh.visible = false; });
+                pinballElements.forEach(e => { e.body.isSensor = true; e.mesh.visible = false; });
+                flippers.forEach(f => { f.body.isSensor = true; f.mesh.visible = false; });
+                koiElements.forEach(e => { e.visible = false; });
+                engine.gravity.x = 0; engine.gravity.y = 0;
+
+                // Apply Mode Specifics
+                if (newMode === 'sandbox') {
+                    document.getElementById('mode-title').innerText = "SANDBOX";
+                    document.getElementById('mode-instructions').innerText = "Tilt & Flick to play. Log habits below.";
+                } 
+                else if (newMode === 'orbit') {
+                    document.getElementById('mode-title').innerText = "ORBIT MODE";
+                    document.getElementById('mode-instructions').innerText = "Sorted by Fill Level • Zen Orbit";
+                    const sorted = [...marbles].sort((a, b) => a.fillLevel - b.fillLevel);
+                    sorted.forEach((m, i) => {
+                        m.body.isSensor = true; 
+                        const angle = (i / sorted.length) * (Math.PI * 2);
+                        Matter.Body.setPosition(m.body, { x: Math.cos(angle) * 3, y: Math.sin(angle) * 3 });
+                        Matter.Body.setVelocity(m.body, { x: 0, y: 0 });
+                    });
+                }
+                else if (newMode === 'billiards') {
+                    document.getElementById('mode-title').innerText = "BILLIARDS MODE";
+                    document.getElementById('mode-instructions').innerText = "Flick the Gold cue ball to break";
+                    
+                    floorMat.color.setHex(0x1a5e20); // Classic Pool Felt Green
+                    billiardsPockets.forEach(p => p.visible = true);
+                    engine.gravity.y = 0;
+                    engine.gravity.x = 0;
+                    
+                    // High bounce and sliding friction for pool balls
+                    marbles.forEach(m => {
+                        m.body.restitution = 0.9;
+                        m.body.frictionAir = 0.015;
+                    });
+
+                    // Rack the balls
+                    const cue = marbles[0];
+                    Matter.Body.setPosition(cue.body, { x: 0, y: boxHeight/4 });
+                    Matter.Body.setVelocity(cue.body, { x: 0, y: 0 });
+
+                    const rackPositions = [
+                        {x: 0, y: -boxHeight/4},
+                        {x: -0.35, y: -boxHeight/4 - 0.6},
+                        {x: 0.35, y: -boxHeight/4 - 0.6},
+                        {x: 0, y: -boxHeight/4 - 1.2}
+                    ];
+                    for(let i=1; i<marbles.length; i++) {
+                        Matter.Body.setPosition(marbles[i].body, rackPositions[i-1]);
+                        Matter.Body.setVelocity(marbles[i].body, { x: 0, y: 0 });
+                    }
+                }
+                else if (newMode === 'pinball') {
+                    document.getElementById('mode-title').innerText = "ANTIQUE PINBALL";
+                    document.getElementById('mode-instructions').innerText = "Swipe UP to plunge • Tap sides to flip";
+                    
+                    floorMat.color.setHex(0x3e1505); // Rich Mahogany Floor
+                    engine.gravity.y = 1.2;
+                    
+                    flippers.forEach(f => { f.body.isSensor = false; f.mesh.visible = true; });
+                    pinballElements.forEach(e => { e.body.isSensor = false; e.mesh.visible = true; });
+                    
+                    const activeBall = marbles[0]; 
+                    Matter.Body.scale(activeBall.body, 0.5, 0.5);
+                    activeBall.mesh.scale.set(0.5, 0.5, 0.5);
+                    activeBall.currentScale = 0.5;
+                    Matter.Body.setPosition(activeBall.body, { x: 0, y: boxHeight/2 - 2.5 });
+                    Matter.Body.setVelocity(activeBall.body, { x: 0, y: 0 });
+                    
+                    for (let i = 1; i < marbles.length; i++) {
+                        Matter.Body.setPosition(marbles[i].body, { x: 100, y: 100 });
+                        marbles[i].body.isSensor = true; marbles[i].mesh.visible = false;
+                    }
+                }
+                else if (newMode === 'maze') {
+                    document.getElementById('mode-title').innerText = "MAZE MODE";
+                    document.getElementById('mode-instructions').innerText = "Tilt phone to navigate";
+                    mazeWalls.forEach(w => { w.body.isSensor = false; w.mesh.visible = true; });
+                }
+                else if (newMode === 'koi') {
+                    document.getElementById('mode-title').innerText = "ZEN GARDEN";
+                    document.getElementById('mode-instructions').innerText = "Ultimate Harmony Reached";
+                    
+                    floorMat.color.setHex(0x1a1c1e); // Dark Slate Floor
+                    document.getElementById('log-bar').style.opacity = '0'; // Fade out HTML UI
+                    document.getElementById('log-bar').style.pointerEvents = 'none';
+                    koiElements.forEach(e => { e.visible = true; });
+                    
+                    // Physically dock the marbles into the UI rings
+                    const tWidth = Math.min(boxWidth * 0.9, 8);
+                    const sX = -tWidth / 2;
+                    const step = tWidth / 5;
+                    
+                    marbles.forEach((m, i) => {
+                        // Transform into Organic Geometries
+                        if (m.pillarData.shape && THREE[m.pillarData.shape]) {
+                            m.mesh.geometry.dispose();
+                            m.mesh.geometry = new THREE[m.pillarData.shape](...m.pillarData.args);
+                        }
+
+                        m.body.isSensor = true; 
+                        const targetX = sX + step * i + (step/2);
+                        const targetY = boxHeight/2 - 1.2; 
+                        
+                        Matter.Body.setPosition(m.body, { x: targetX, y: targetY });
+                        Matter.Body.setVelocity(m.body, { x: 0, y: 0 });
+                        Matter.Body.setAngularVelocity(m.body, 0);
+                    });
+                }
+            };
+
+            // --- 7. INPUT HANDLING & FLICKING ---
+            const raycaster = new THREE.Raycaster();
+            const mouseCoords = new THREE.Vector2();
+            let flickState = { active: false, marble: null, startX: 0, startY: 0 };
+
+            // Audio Context for the Ben Bear Profile
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            let audioCtx = null;
+
+            window.addEventListener('pointerdown', (e) => {
+                // Initialize/Resume Audio on first touch gesture (Browser policy)
+                if (!audioCtx) audioCtx = new AudioContext();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+
+                if (e.target.tagName === 'BUTTON') return;
+
+                // 1. Raycaster for flicking & UI Triggers
+                mouseCoords.x = (e.clientX / window.innerWidth) * 2 - 1;
+                mouseCoords.y = -(e.clientY / window.innerHeight) * 2 + 1;
+                raycaster.setFromCamera(mouseCoords, camera);
+
+                const activeMeshes = marbles.filter(m => !m.body.isSensor && m.mesh.visible).map(m => m.mesh);
+                if (insetMarble.visible) activeMeshes.push(insetMarble); // Add the trigger sphere
+
+                const intersects = raycaster.intersectObjects(activeMeshes);
+
+                if (intersects.length > 0) {
+                    const hitMesh = intersects[0].object;
+                    
+                    // Trigger Zen Garden on physical tap!
+                    if (hitMesh === insetMarble) {
+                        if (state.unlockedKoi && currentMode !== 'koi') {
+                            window.activateMode('koi');
+                        }
+                        return; // Prevent further interactions
+                    }
+
+                    const marble = marbles.find(m => m.mesh === hitMesh);
+                    if (marble) {
+                        flickState = { active: true, marble: marble, startX: e.clientX, startY: e.clientY };
+                        return; // Block flippers if we are dragging a marble
+                    }
+                }
+
+                // 2. Flipper Logic
+                if (currentMode === 'pinball') {
+                    const isLeft = e.clientX < window.innerWidth / 2;
+                    flippers.forEach(f => {
+                        if (f.isLeft === isLeft) Matter.Body.applyForce(f.body, { x: f.body.position.x + (f.isLeft ? 1 : -1), y: f.body.position.y }, { x: 0, y: -0.06 });
+                    });
+                }
+            });
+
+            window.addEventListener('pointerup', (e) => {
+                if (flickState.active && flickState.marble) {
+                    const dx = e.clientX - flickState.startX;
+                    const dy = e.clientY - flickState.startY;
+                    
+                    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                        let forceX = dx * 0.0003;
+                        let forceY = dy * 0.0003;
+                        
+                        const maxForce = 0.08;
+                        forceX = Math.max(-maxForce, Math.min(maxForce, forceX));
+                        forceY = Math.max(-maxForce, Math.min(maxForce, forceY));
+
+                        Matter.Body.applyForce(flickState.marble.body, flickState.marble.body.position, { x: forceX, y: forceY });
+                    }
+                    flickState.active = false;
+                    flickState.marble = null;
+                }
+            });
+
+            window.addEventListener('deviceorientation', (e) => {
+                if (currentMode === 'sandbox' || currentMode === 'maze') {
+                    let x = Math.max(-90, Math.min(90, e.gamma)); 
+                    let y = Math.max(-90, Math.min(90, e.beta));  
+                    engine.gravity.x = (x / 90) * 2;
+                    engine.gravity.y = (y / 90) * 2;
+                }
+            });
+
+            // --- 7.5 ACOUSTICS & HAPTICS (Ben Bear Profile) ---
+            function playAcousticRipple() {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                
+                // Play a fast, echoing 5-note "ripple" chord to signify the ultimate unlock
+                const notes = [400, 500, 600, 800, 1200];
+                notes.forEach((freq, i) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, audioCtx.currentTime + i * 0.1);
+                    
+                    gain.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.1);
+                    gain.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + i * 0.1 + 0.05);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + i * 0.1 + 0.3);
+                    
+                    osc.start(audioCtx.currentTime + i * 0.1);
+                    osc.stop(audioCtx.currentTime + i * 0.1 + 0.3);
+                });
+            }
+
+            function playAcousticTap(relativeSpeed) {
+                if (!audioCtx) return;
+                
+                // Map collision speed to volume (clamped between 0.05 and 0.6)
+                const vol = Math.max(0.05, Math.min(0.6, relativeSpeed * 0.05));
+                
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                // "Ben Bear" soft wooden/glass tap acoustic synthesis
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(800, audioCtx.currentTime); 
+                osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.05);
+                
+                gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+                
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.05);
+                
+                // Subtle device haptic feedback on harder impacts
+                if (navigator.vibrate && vol > 0.2) {
+                    navigator.vibrate(Math.min(15, relativeSpeed * 2));
+                }
+            }
+
+            Events.on(engine, 'collisionStart', (event) => {
+                const pairs = event.pairs;
+                for (let i = 0; i < pairs.length; i++) {
+                    const { bodyA, bodyB } = pairs[i];
+                    
+                    // Filter for active collisions (ignore hidden sensors/ghost walls)
+                    if (bodyA.isSensor || bodyB.isSensor) continue;
+
+                    const isWallCollision = (bodyA.isStatic && !bodyB.isStatic) || (!bodyA.isStatic && bodyB.isStatic);
+                    const isMarbleCollision = (!bodyA.isStatic && !bodyB.isStatic);
+
+                    if (isWallCollision || isMarbleCollision) {
+                        const speedA = bodyA.speed || 0;
+                        const speedB = bodyB.speed || 0;
+                        const relativeSpeed = speedA + speedB;
+
+                        // Threshold to prevent tiny resting micro-jitters from creating a wall of sound
+                        if (relativeSpeed > 0.5) {
+                            playAcousticTap(relativeSpeed);
+                        }
+                    }
+                }
+            });
+
+            // --- 8. RENDER LOOP ---
+            const runner = Runner.create();
+            Runner.run(runner, engine);
+
+            function animate() {
+                requestAnimationFrame(animate);
+
+                if (currentMode === 'koi') {
+                    // Slowly rotate the organic geometries in their docks
+                    marbles.forEach(m => {
+                        m.mesh.rotation.x += 0.01;
+                        m.mesh.rotation.y += 0.01;
+                    });
+                }
+
+                // Sync Physics to 3D
+                marbles.forEach(m => {
+                    m.mesh.position.x = m.body.position.x;
+                    m.mesh.position.y = -m.body.position.y;
+                    if (currentMode !== 'koi') m.mesh.rotation.z = -m.body.angle;
+                });
+
+                flippers.forEach(f => {
+                    f.mesh.position.x = f.body.position.x;
+                    f.mesh.position.y = -f.body.position.y;
+                    f.mesh.rotation.z = -f.body.angle;
+                });
+
+                renderer.render(scene, camera);
+            }
+            animate();
+        };
+    </script>
+</body>
+</html>
